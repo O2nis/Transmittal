@@ -1,0 +1,9 @@
+pandas
+numpy
+matplotlib
+streamlit
+thefuzz
+chardet
+openpyxl
+seaborn
+chrono
