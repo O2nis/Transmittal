@@ -1,14 +1,30 @@
-
 import streamlit as st
 import pandas as pd
 from io import BytesIO
 import re
+from datetime import datetime
+
+def clean_dates(df):
+    """
+    Convert all date columns to '11-May-25' format
+    """
+    for col in df.columns:
+        # Try to convert to datetime
+        try:
+            df[col] = pd.to_datetime(df[col], errors='ignore')
+            # If successful (datetime column), format it
+            if pd.api.types.is_datetime64_any_dtype(df[col]):
+                df[col] = df[col].dt.strftime('%d-%b-%y').str.upper()
+        except:
+            pass
+    return df
 
 def update_excel(df, codes, date, transmittal, date_col, transmittal_col, code_col):
     """
     Update the Excel dataframe with the provided information
     """
     updated_rows = 0
+    formatted_date = date.strftime('%d-%b-%y').upper()  # Format as 11-MAY-25
     
     for code in codes:
         # Find rows where the code matches (case insensitive, strip whitespace)
@@ -16,7 +32,7 @@ def update_excel(df, codes, date, transmittal, date_col, transmittal_col, code_c
         matching_rows = df[mask]
         
         if not matching_rows.empty:
-            df.loc[mask, date_col] = date
+            df.loc[mask, date_col] = formatted_date
             df.loc[mask, transmittal_col] = transmittal
             updated_rows += len(matching_rows)
     
@@ -31,8 +47,10 @@ def main():
     
     if uploaded_file is not None:
         try:
+            # Read and clean dates on initial load
             df = pd.read_excel(uploaded_file)
-            st.success("File successfully loaded!")
+            df = clean_dates(df)
+            st.success("File successfully loaded and dates cleaned!")
             
             # Display preview
             st.subheader("File Preview")
@@ -71,18 +89,21 @@ def main():
                         date_col, transmittal_col, code_col
                     )
                     
+                    # Clean all dates again before output
+                    updated_df = clean_dates(updated_df)
+                    
                     if updated_rows > 0:
                         st.success(f"Successfully updated {updated_rows} rows!")
                         
                         # Show updated rows
                         st.subheader("Updated Rows Preview")
-                        # Find which rows were changed
-                        mask = (updated_df[date_col] == date_value) & (updated_df[transmittal_col] == transmittal_value)
+                        formatted_date = date_value.strftime('%d-%b-%y').upper()
+                        mask = (updated_df[date_col] == formatted_date) & (updated_df[transmittal_col] == transmittal_value)
                         st.write(updated_df[mask].head())
                         
                         # Download button
                         output = BytesIO()
-                        with pd.ExcelWriter(output, engine='openpyxl') as writer:
+                        with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
                             updated_df.to_excel(writer, index=False)
                         output.seek(0)
                         
