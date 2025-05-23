@@ -2,8 +2,21 @@ import streamlit as st
 import pandas as pd
 from io import BytesIO
 import re
+from datetime import datetime
 from openpyxl import Workbook
 from openpyxl.styles import NamedStyle
+
+def excel_serial_to_date(serial):
+    """
+    Convert Excel serial date to MM/DD/YYYY string format.
+    Excel serial dates are days since 1900-01-01, with 1900 treated as a leap year.
+    """
+    excel_epoch = datetime(1899, 12, 30)
+    try:
+        date = excel_epoch + pd.Timedelta(days=float(serial))
+        return date.strftime("%m/%d/%Y")
+    except (ValueError, TypeError):
+        return serial  # Return original value if not a valid serial date
 
 def update_excel(df, codes, date, transmittal, date_col, transmittal_col, code_col):
     """
@@ -36,6 +49,18 @@ def main():
     if uploaded_file is not None:
         try:
             df = pd.read_excel(uploaded_file)
+            
+            # Identify potential date columns (based on column names or numerical values)
+            date_columns = [
+                col for col in df.columns 
+                if any(keyword in col.lower() for keyword in ['date', 'issuance', 'review', 'expected']) 
+                or df[col].apply(lambda x: isinstance(x, (int, float)) and 40000 <= x <= 50000).any()
+            ]
+            
+            # Convert existing date columns to MM/DD/YYYY format
+            for col in date_columns:
+                df[col] = df[col].apply(excel_serial_to_date)
+            
             st.success("File successfully loaded!")
             
             # Display preview
@@ -94,11 +119,12 @@ def main():
                             # Access the openpyxl workbook and worksheet
                             workbook = writer.book
                             worksheet = writer.sheets['Sheet1']
-                            # Apply the date format to the date column
-                            date_col_idx = updated_df.columns.get_loc(date_col) + 1  # +1 for Excel 1-based indexing
-                            for row in range(2, len(updated_df) + 2):  # Start from row 2 (after header)
-                                cell = worksheet.cell(row=row, column=date_col_idx)
-                                cell.style = date_style
+                            # Apply date format to all identified date columns
+                            for col in date_columns:
+                                col_idx = updated_df.columns.get_loc(col) + 1  # +1 for Excel 1-based indexing
+                                for row in range(2, len(updated_df) + 2):  # Start from row 2 (after header)
+                                    cell = worksheet.cell(row=row, column=col_idx)
+                                    cell.style = date_style
                         output.seek(0)
                         
                         st.download_button(
