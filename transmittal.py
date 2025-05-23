@@ -1,1 +1,143 @@
+import streamlit as st
+import pandas as pd
+from io import BytesIO
+import re
+from datetime import datetime
+from openpyxl import Workbook
+from openpyxl.styles import NamedStyle
 
+def excel_serial_to_date(serial):
+    """
+    Convert Excel serial date to MM/DD/YYYY string format.
+    Excel serial dates are days since 1900-01-01, with 1900 treated as a leap year.
+    """
+    excel_epoch = datetime(1899, 12, 30)
+    try:
+        date = excel_epoch + pd.Timedelta(days=float(serial))
+        return date.strftime("%m/%d/%Y")
+    except (ValueError, TypeError):
+        return serial  # Return original value if not a valid serial date
+
+def update_excel(df, codes, date, transmittal, date_col, transmittal_col, code_col):
+    """
+    Update the Excel dataframe with the provided information
+    """
+    updated_rows = 0
+    
+    # Convert the input date to MM/DD/YYYY format
+    date_str = date.strftime("%m/%d/%Y")
+    
+    for code in codes:
+        # Find rows where the code matches (case insensitive, strip whitespace)
+        mask = df[code_col].astype(str).str.strip().str.lower() == code.strip().lower()
+        matching_rows = df[mask]
+        
+        if not matching_rows.empty:
+            df.loc[mask, date_col] = date_str
+            df.loc[mask, transmittal_col] = transmittal
+            updated_rows += len(matching_rows)
+    
+    return df, updated_rows
+
+def main():
+    st.title("Excel Data Updater")
+    st.write("Upload an Excel file, paste codes, and update corresponding rows with date and transmittal code.")
+    
+    # File upload
+    uploaded_file = st.file_uploader("Upload Excel File", type=['xlsx', 'xls'])
+    
+    if uploaded_file is not None:
+        try:
+            df = pd.read_excel(uploaded_file)
+            
+            # Identify potential date columns (based on column names or numerical values)
+            date_columns = [
+                col for col in df.columns 
+                if any(keyword in col.lower() for keyword in ['date', 'issuance', 'review', 'expected']) 
+                or df[col].apply(lambda x: isinstance(x, (int, float)) and 40000 <= x <= 50000).any()
+            ]
+            
+            # Convert existing date columns to MM/DD/YYYY format
+            for col in date_columns:
+                df[col] = df[col].apply(excel_serial_to_date)
+            
+            st.success("File successfully loaded!")
+            
+            # Display preview
+            st.subheader("File Preview")
+            st.write(df.head())
+            
+            # Get column names
+            columns = df.columns.tolist()
+            
+            # User inputs
+            st.subheader("Update Parameters")
+            
+            # Column selection
+            code_col = st.selectbox("Select the column containing codes to match:", columns)
+            date_col = st.selectbox("Select the column to write the date to:", columns)
+            transmittal_col = st.selectbox("Select the column to write the transmittal code to:", columns)
+            
+            # Data inputs
+            date_value = st.date_input("Enter the date:")
+            transmittal_value = st.text_input("Enter the transmittal code:")
+            
+            # Code input
+            st.write("Paste codes (one per line or separated by commas):")
+            codes_input = st.text_area("Codes", height=150)
+            
+            if st.button("Update Data"):
+                if not codes_input:
+                    st.warning("Please enter at least one code.")
+                else:
+                    # Parse codes (split by newline or comma)
+                    codes = re.split(r'[\n,]', codes_input)
+                    codes = [code.strip() for code in codes if code.strip()]
+                    
+                    # Update the dataframe
+                    updated_df, updated_rows = update_excel(
+                        df.copy(), codes, date_value, transmittal_value,
+                        date_col, transmittal_col, code_col
+                    )
+                    
+                    if updated_rows > 0:
+                        st.success(f"Successfully updated {updated_rows} rows!")
+                        
+                        # Show updated rows
+                        st.subheader("Updated Rows Preview")
+                        # Find which rows were changed
+                        mask = (updated_df[date_col] == date_value.strftime("%m/%d/%Y")) & (updated_df[transmittal_col] == transmittal_value)
+                        st.write(updated_df[mask].head())
+                        
+                        # Create a date style for MM/DD/YYYY format
+                        date_style = NamedStyle(name='date_format', number_format='MM/DD/YYYY')
+                        
+                        # Download button
+                        output = BytesIO()
+                        with pd.ExcelWriter(output, engine='openpyxl') as writer:
+                            updated_df.to_excel(writer, index=False, sheet_name='Sheet1')
+                            # Access the openpyxl workbook and worksheet
+                            workbook = writer.book
+                            worksheet = writer.sheets['Sheet1']
+                            # Apply date format to all identified date columns
+                            for col in date_columns:
+                                col_idx = updated_df.columns.get_loc(col) + 1  # +1 for Excel 1-based indexing
+                                for row in range(2, len(updated_df) + 2):  # Start from row 2 (after header)
+                                    cell = worksheet.cell(row=row, column=col_idx)
+                                    cell.style = date_style
+                        output.seek(0)
+                        
+                        st.download_button(
+                            label="Download Updated Excel File",
+                            data=output,
+                            file_name="updated_file.xlsx",
+                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                        )
+                    else:
+                        st.warning("No matching codes found in the specified column.")
+            
+        except Exception as e:
+            st.error(f"Error processing file: {str(e)}")
+
+if __name__ == "__main__":
+    main()
